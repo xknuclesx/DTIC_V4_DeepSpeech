@@ -22,6 +22,13 @@ try:
     import wave
     import io
     
+    # VAD (detección de actividad vocal)
+    try:
+        import webrtcvad
+        _VAD_AVAILABLE = True
+    except Exception as _vad_err:
+        _VAD_AVAILABLE = False
+    
     # Imports para ML y detección de fraude
     import joblib
     import re
@@ -123,7 +130,13 @@ class AudioTranscriptor:
             'pause_threshold': 0.5,
             'listen_timeout': 2,
             'phrase_time_limit': 8,
-            'language': 'es-ES'
+            'language': 'es-ES',
+            # VAD (webrtcvad)
+            'vad_enabled': False,
+            'vad_aggressiveness': 2,   # 0..3
+            'vad_padding_ms': 300,     # pre/post relleno en ms
+            'vad_frame_ms': 30,        # 10/20/30 ms soportados
+            'sample_rate': 16000       # 16k mono para VAD
         }
         
         # Estado del sistema
@@ -286,6 +299,19 @@ class AudioTranscriptor:
         # Emitir estado de escucha iniciado
         socketio.emit('listening_status', {'status': 'started', 'message': 'Escuchando...'})
         
+        # Si VAD está habilitado y disponible, usar ruta VAD
+        use_vad = bool(self.audio_config.get('vad_enabled', False)) and globals().get('_VAD_AVAILABLE', False)
+        if bool(self.audio_config.get('vad_enabled', False)) and not globals().get('_VAD_AVAILABLE', False):
+            print("�YY� VAD habilitado pero 'webrtcvad' no est�� instalado. Usando modo est��ndar.")
+        if use_vad:
+            try:
+                self._listen_with_vad()
+                print("�o. VAD finalizado")
+                return
+            except Exception as e:
+                print(f"�?O Error en modo VAD: {e}. Cambiando a modo est��ndar.")
+                # Continúa a modo estándar (SpeechRecognition)
+        
         with self.microphone as source:
             print("🎧 Micrófono abierto, iniciando escucha...")
             
@@ -384,6 +410,83 @@ class AudioTranscriptor:
                 'timestamp': datetime.now().isoformat(),
                 'engine_info': self.get_current_engine_info()
             })
+
+    def _listen_with_vad(self):
+        """Capturador continuo con PyAudio + WebRTC VAD, creando segmentos con padding."""
+        if not globals().get('_VAD_AVAILABLE', False):
+            raise RuntimeError("webrtcvad no disponible")
+
+        vad = webrtcvad.Vad(int(self.audio_config.get('vad_aggressiveness', 2)))
+        sample_rate = int(self.audio_config.get('sample_rate', 16000))
+        frame_ms = int(self.audio_config.get('vad_frame_ms', 30))
+        padding_ms = int(self.audio_config.get('vad_padding_ms', 300))
+
+        if frame_ms not in (10, 20, 30):
+            frame_ms = 30
+
+        from collections import deque as _dq
+        bytes_per_sample = 2  # 16-bit
+        channels = 1
+        frame_size = int(sample_rate * frame_ms / 1000)
+        bytes_per_frame = frame_size * bytes_per_sample
+        num_padding_frames = max(1, int(padding_ms / frame_ms))
+
+        pa = pyaudio.PyAudio()
+        stream = pa.open(
+            format=pyaudio.paInt16,
+            channels=channels,
+            rate=sample_rate,
+            input=True,
+            frames_per_buffer=frame_size
+        )
+        print(f"�Y'' VAD activo: agg={vad.mode}, frame={frame_ms}ms, padding={padding_ms}ms")
+
+        ring_buffer = _dq(maxlen=num_padding_frames)
+        triggered = False
+        voiced_frames = []
+
+        try:
+            while self.is_listening:
+                frame = stream.read(frame_size, exception_on_overflow=False)
+                if len(frame) != bytes_per_frame:
+                    continue
+                is_speech = vad.is_speech(frame, sample_rate)
+
+                if not triggered:
+                    ring_buffer.append((frame, is_speech))
+                    num_voiced = len([1 for f, s in ring_buffer if s])
+                    # Disparar cuando haya suficiente voz en el padding
+                    if ring_buffer.maxlen and num_voiced > 0.6 * ring_buffer.maxlen:
+                        triggered = True
+                        print("🎬 VAD: inicio de voz")
+                        for f, s in ring_buffer:
+                            voiced_frames.append(f)
+                        ring_buffer.clear()
+                else:
+                    # Ya en segmento de voz
+                    voiced_frames.append(frame)
+                    ring_buffer.append((frame, is_speech))
+                    num_unvoiced = len([1 for f, s in ring_buffer if not s])
+                    if ring_buffer.maxlen and num_unvoiced > 0.6 * ring_buffer.maxlen:
+                        # Fin del segmento; incluir padding de cola implícito en ring_buffer
+                        print("🏁 VAD: fin de voz")
+                        segment_bytes = b''.join(voiced_frames)
+                        voiced_frames = []
+                        ring_buffer.clear()
+                        triggered = False
+
+                        # Convertir a AudioData (PCM16 mono)
+                        audio_data = sr.AudioData(segment_bytes, sample_rate, bytes_per_sample)
+                        threading.Thread(
+                            target=self._process_audio,
+                            args=(audio_data,),
+                            daemon=True
+                        ).start()
+
+        finally:
+            stream.stop_stream()
+            stream.close()
+            pa.terminate()
 
 # Instancia global del transcriptor
 transcriptor = AudioTranscriptor()
@@ -516,6 +619,27 @@ HTML_TEMPLATE = '''
                                 </label>
                                 <input type="range" class="form-range" id="phrase_time_limit" min="3" max="15" value="8">
                                 <small class="text-muted">Valor: <span id="phrase_value">8</span>s</small>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="form-check form-switch mt-4">
+                                    <input class="form-check-input" type="checkbox" id="vad_enabled">
+                                    <label class="form-check-label">
+                                        VAD (Detecci��n de Voz)
+                                        <button type="button" class="btn btn-sm btn-outline-info ms-2" 
+                                                data-bs-toggle="tooltip" data-bs-placement="top" 
+                                                title="Usa WebRTC VAD para detectar segmentos de voz con menor latencia y mejor control del ruido">
+                                            <i class="fas fa-info-circle"></i>
+                                        </button>
+                                    </label>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label">Agresividad VAD (0-3): <span id="vad_agg_value">2</span></label>
+                                <input type="range" class="form-range" id="vad_aggressiveness" min="0" max="3" step="1" value="2">
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label">Relleno VAD (ms): <span id="vad_padding_value">300</span></label>
+                                <input type="range" class="form-range" id="vad_padding_ms" min="100" max="600" step="50" value="300">
                             </div>
                         </div>
                         <div class="row mt-3">
@@ -790,7 +914,10 @@ HTML_TEMPLATE = '''
                 phrase_time_limit: parseInt(document.getElementById('phrase_time_limit').value),
                 listen_timeout: parseInt(document.getElementById('listen_timeout').value),
                 language: document.getElementById('language').value,
-                dynamic_energy_threshold: document.getElementById('dynamic_energy_threshold').checked
+                dynamic_energy_threshold: document.getElementById('dynamic_energy_threshold').checked,
+                vad_enabled: document.getElementById('vad_enabled').checked,
+                vad_aggressiveness: parseInt(document.getElementById('vad_aggressiveness').value),
+                vad_padding_ms: parseInt(document.getElementById('vad_padding_ms').value)
             };
 
             fetch('/update_audio_config', {
@@ -854,6 +981,21 @@ HTML_TEMPLATE = '''
 
         document.getElementById('language').addEventListener('change', updateAudioConfig);
         document.getElementById('dynamic_energy_threshold').addEventListener('change', updateAudioConfig);
+        // VAD controls
+        const _vadEnabledEl = document.getElementById('vad_enabled');
+        const _vadAggEl = document.getElementById('vad_aggressiveness');
+        const _vadPadEl = document.getElementById('vad_padding_ms');
+        if (_vadEnabledEl) _vadEnabledEl.addEventListener('change', updateAudioConfig);
+        if (_vadAggEl) _vadAggEl.addEventListener('input', function() {
+            const el = document.getElementById('vad_agg_value');
+            if (el) el.textContent = this.value;
+            updateAudioConfig();
+        });
+        if (_vadPadEl) _vadPadEl.addEventListener('input', function() {
+            const el = document.getElementById('vad_padding_value');
+            if (el) el.textContent = this.value;
+            updateAudioConfig();
+        });
 
         // Socket.IO eventos - declarados fuera para asegurar que estén listos
         let socket;
@@ -1053,6 +1195,15 @@ HTML_TEMPLATE = '''
                         document.getElementById('timeout_value').textContent = config.listen_timeout || 2;
                         document.getElementById('language').value = config.language || 'es-ES';
                         document.getElementById('dynamic_energy_threshold').checked = config.dynamic_energy_threshold || false;
+                        // VAD fields
+                        const vadEnabledEl = document.getElementById('vad_enabled');
+                        const vadAggEl = document.getElementById('vad_aggressiveness');
+                        const vadPadEl = document.getElementById('vad_padding_ms');
+                        const vadAggValEl = document.getElementById('vad_agg_value');
+                        const vadPadValEl = document.getElementById('vad_padding_value');
+                        if (vadEnabledEl) vadEnabledEl.checked = !!config.vad_enabled;
+                        if (vadAggEl) { vadAggEl.value = (config.vad_aggressiveness ?? 2); if (vadAggValEl) vadAggValEl.textContent = vadAggEl.value; }
+                        if (vadPadEl) { vadPadEl.value = (config.vad_padding_ms ?? 300); if (vadPadValEl) vadPadValEl.textContent = vadPadEl.value; }
                     }
                 })
                 .catch(error => console.error('Error cargando configuración:', error));
@@ -1272,6 +1423,13 @@ def update_audio_config():
             config['listen_timeout'] = int(config['listen_timeout'])
         if 'dynamic_energy_threshold' in config:
             config['dynamic_energy_threshold'] = bool(config['dynamic_energy_threshold'])
+        # VAD fields
+        if 'vad_enabled' in config:
+            config['vad_enabled'] = bool(config['vad_enabled'])
+        if 'vad_aggressiveness' in config:
+            config['vad_aggressiveness'] = int(config['vad_aggressiveness'])
+        if 'vad_padding_ms' in config:
+            config['vad_padding_ms'] = int(config['vad_padding_ms'])
         
         success = transcriptor.update_audio_config(config)
         return jsonify({'success': success})
@@ -1404,6 +1562,13 @@ def handle_update_audio_config(data):
             config['language'] = str(data['language'])
         if 'dynamic_energy_threshold' in data:
             config['dynamic_energy_threshold'] = bool(data['dynamic_energy_threshold'])
+        # VAD fields
+        if 'vad_enabled' in data:
+            config['vad_enabled'] = bool(data['vad_enabled'])
+        if 'vad_aggressiveness' in data:
+            config['vad_aggressiveness'] = int(data['vad_aggressiveness'])
+        if 'vad_padding_ms' in data:
+            config['vad_padding_ms'] = int(data['vad_padding_ms'])
         
         if transcriptor.update_audio_config(config):
             emit('config_updated', {'success': True, 'config': config})

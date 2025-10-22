@@ -38,11 +38,11 @@ try:
     # Import del gestor de motores
     from engine_manager import TranscriptionEngineManager
     
-    print("✅ Imports básicos cargados correctamente")
+    print("[OK] Imports básicos cargados correctamente")
     
 except ImportError as e:
-    print(f"❌ Error importando dependencias básicas: {e}")
-    print("💡 Asegúrate de tener instalado: pip install SpeechRecognition pyaudio Flask Flask-SocketIO")
+    print(f"[ERROR] Error importando dependencias básicas: {e}")
+    print("[INFO] Asegúrate de tener instalado: pip install SpeechRecognition pyaudio Flask Flask-SocketIO")
     exit(1)
 
 app = Flask(__name__)
@@ -69,10 +69,10 @@ class FraudDetector:
             # Configuración de threshold
             self.fraud_threshold = 60  # 60% threshold para detección
             
-            print("✅ Detector de fraude cargado correctamente")
+            print("[OK] Detector de fraude cargado correctamente")
             
         except Exception as e:
-            print(f"❌ Error cargando detector de fraude: {e}")
+            print(f"[ERROR] Error cargando detector de fraude: {e}")
             self.model = None
             self.vectorizer = None
     
@@ -107,7 +107,7 @@ class FraudDetector:
             }
             
         except Exception as e:
-            print(f"❌ Error analizando texto: {e}")
+            print(f"[ERROR] Error analizando texto: {e}")
             return {
                 'is_fraud': False,
                 'probability': 0,
@@ -122,21 +122,89 @@ class AudioTranscriptor:
         # Inicializar gestor de motores
         self.engine_manager = TranscriptionEngineManager()
         
-        # Configuración de audio por defecto
+        # Configuración de audio por defecto (Perfil 1 - Oficina tranquila)
         self.audio_config = {
-            'energy_threshold': 2000,
-            'dynamic_energy_threshold': False,
-            'dynamic_energy_adjustment_damping': 0.15,
-            'pause_threshold': 0.5,
-            'listen_timeout': 2,
-            'phrase_time_limit': 8,
+            'energy_threshold': 600,
+            'dynamic_energy_threshold': True,
+            'dynamic_energy_adjustment_damping': 0.18,
+            'dynamic_energy_adjustment_ratio': 1.5,
+            'pause_threshold': 0.6,
+            'non_speaking_duration': 0.3,
+            'listen_timeout': 3,
+            'phrase_time_limit': 10,
             'language': 'es-ES',
             # VAD (webrtcvad)
             'vad_enabled': False,
             'vad_aggressiveness': 2,   # 0..3
-            'vad_padding_ms': 300,     # pre/post relleno en ms
-            'vad_frame_ms': 30,        # 10/20/30 ms soportados
-            'sample_rate': 16000       # 16k mono para VAD
+            'vad_padding_ms': 250,     # pre/post relleno en ms
+            'vad_frame_ms': 20,        # 10/20/30 ms soportados
+            'vad_min_segment_ms': 250, # duración mínima de segmento
+            'sample_rate': 16000,      # 16k mono para VAD
+            'device_index': None       # índice de dispositivo de audio
+        }
+        
+        # Perfiles predefinidos
+        self.audio_profiles = {
+            'office': {
+                'name': 'Oficina Tranquila',
+                'description': 'Alta precisión, sin ruido de fondo',
+                'config': {
+                    'energy_threshold': 600,
+                    'dynamic_energy_threshold': True,
+                    'dynamic_energy_adjustment_damping': 0.18,
+                    'dynamic_energy_adjustment_ratio': 1.5,
+                    'pause_threshold': 0.6,
+                    'non_speaking_duration': 0.3,
+                    'listen_timeout': 3,
+                    'phrase_time_limit': 10,
+                    'vad_enabled': False,
+                    'vad_aggressiveness': 2,
+                    'vad_padding_ms': 250,
+                    'vad_frame_ms': 20,
+                    'vad_min_segment_ms': 250,
+                    'sample_rate': 16000
+                }
+            },
+            'callcenter': {
+                'name': 'Call Center',
+                'description': 'Ruido variable, baja latencia con VAD',
+                'config': {
+                    'energy_threshold': 400,
+                    'dynamic_energy_threshold': True,
+                    'dynamic_energy_adjustment_damping': 0.15,
+                    'dynamic_energy_adjustment_ratio': 1.5,
+                    'pause_threshold': 0.5,
+                    'non_speaking_duration': 0.3,
+                    'listen_timeout': 2,
+                    'phrase_time_limit': 8,
+                    'vad_enabled': True,
+                    'vad_aggressiveness': 2,
+                    'vad_padding_ms': 250,
+                    'vad_frame_ms': 20,
+                    'vad_min_segment_ms': 250,
+                    'sample_rate': 16000
+                }
+            },
+            'voip': {
+                'name': 'Telefónico/VoIP',
+                'description': 'Optimizado para llamadas (8kHz)',
+                'config': {
+                    'energy_threshold': 350,
+                    'dynamic_energy_threshold': True,
+                    'dynamic_energy_adjustment_damping': 0.20,
+                    'dynamic_energy_adjustment_ratio': 1.5,
+                    'pause_threshold': 0.5,
+                    'non_speaking_duration': 0.3,
+                    'listen_timeout': 3,
+                    'phrase_time_limit': 8,
+                    'vad_enabled': True,
+                    'vad_aggressiveness': 3,
+                    'vad_padding_ms': 250,
+                    'vad_frame_ms': 20,
+                    'vad_min_segment_ms': 250,
+                    'sample_rate': 8000
+                }
+            }
         }
         
         # Estado del sistema
@@ -161,7 +229,7 @@ class AudioTranscriptor:
         # Configurar motor por defecto (DeepSpeech)
         self._setup_default_engine()
         
-        print("🔧 Configuración de audio aplicada:", self.audio_config)
+        print("[CONFIG] Configuracion de audio aplicada:", self.audio_config)
         
         # Inicializar micrófono
         self._initialize_microphone()
@@ -170,41 +238,59 @@ class AudioTranscriptor:
         """Configurar motor por defecto"""
         config = {'audio': self.audio_config}
         if self.engine_manager.set_engine('deepspeech', config):
-            print("✅ Motor DeepSpeech configurado como predeterminado")
+            print("[OK] Motor DeepSpeech configurado como predeterminado")
         else:
-            print("⚠️ Error configurando motor predeterminado")
+            print("[WARNING] Error configurando motor predeterminado")
     
     def _initialize_microphone(self):
-        """Inicializar micrófono"""
+        """Inicializar micrófono con configuración optimizada"""
         try:
-            print("🎤 Buscando micrófonos disponibles...")
-            self.microphone = sr.Microphone()
+            print("[AUDIO] Buscando microfonos disponibles...")
+            
+            # Configurar sample rate y chunk size según VAD
+            srate = int(self.audio_config.get('sample_rate', 16000))
+            frame_ms = int(self.audio_config.get('vad_frame_ms', 20))
+            chunk = max(160, int(srate * frame_ms / 1000))  # ej: 320 @16kHz/20ms
+            
+            # Inicializar micrófono con parámetros optimizados
+            device_idx = self.audio_config.get('device_index', None)
+            self.microphone = sr.Microphone(
+                device_index=device_idx,
+                sample_rate=srate,
+                chunk_size=chunk
+            )
             
             # Configurar recognizer con el motor actual
             if self.engine_manager.current_engine:
                 recognizer = self.engine_manager.current_engine.recognizer
                 
-                # Aplicar configuración de audio
-                recognizer.energy_threshold = self.audio_config['energy_threshold']
-                recognizer.dynamic_energy_threshold = self.audio_config['dynamic_energy_threshold']
-                recognizer.dynamic_energy_adjustment_damping = self.audio_config['dynamic_energy_adjustment_damping']
-                recognizer.pause_threshold = self.audio_config['pause_threshold']
+                # Aplicar configuración de audio completa
+                recognizer.energy_threshold = self.audio_config.get('energy_threshold', 600)
+                recognizer.dynamic_energy_threshold = self.audio_config.get('dynamic_energy_threshold', True)
+                recognizer.dynamic_energy_adjustment_damping = self.audio_config.get('dynamic_energy_adjustment_damping', 0.18)
+                recognizer.dynamic_energy_adjustment_ratio = self.audio_config.get('dynamic_energy_adjustment_ratio', 1.5)
+                recognizer.pause_threshold = self.audio_config.get('pause_threshold', 0.6)
+                recognizer.non_speaking_duration = self.audio_config.get('non_speaking_duration', 0.3)
                 
-                print("✅ Micrófono inicializado correctamente")
+                print(f"[OK] Microfono inicializado: {srate}Hz, chunk={chunk}")
+                print(f"[CONFIG] Umbral energia: {recognizer.energy_threshold}")
+                print(f"[CONFIG] VAD: {'Activado' if self.audio_config.get('vad_enabled') else 'Desactivado'}")
                 
                 # Calibrar micrófono
                 with self.microphone as source:
-                    print("🔧 Calibrando micrófono para ruido ambiental...")
+                    print("[AUDIO] Calibrando microfono para ruido ambiental...")
                     recognizer.adjust_for_ambient_noise(source, duration=1)
-                    print(f"✅ Umbral de energía calibrado: {recognizer.energy_threshold}")
+                    print(f"[OK] Umbral calibrado: {recognizer.energy_threshold}")
             
         except Exception as e:
-            print(f"❌ Error inicializando micrófono: {e}")
+            print(f"[ERROR] Error inicializando microfono: {e}")
             self.microphone = None
     
     def change_engine(self, engine_id, engine_config=None):
         """Cambiar motor de transcripción"""
         try:
+            print(f"[ENGINE] Cambiando motor de transcripcion a: {engine_id}")
+            
             # Detener transcripción si está activa
             was_listening = self.is_listening
             if was_listening:
@@ -217,6 +303,8 @@ class AudioTranscriptor:
             
             # Cambiar motor
             if self.engine_manager.set_engine(engine_id, config):
+                print(f"[OK] Motor cambiado exitosamente a: {engine_id}")
+                
                 # Reinicializar micrófono con nuevo motor
                 self._initialize_microphone()
                 
@@ -226,10 +314,11 @@ class AudioTranscriptor:
                 
                 return True
             else:
+                print(f"[ERROR] No se pudo cambiar al motor: {engine_id}")
                 return False
                 
         except Exception as e:
-            print(f"❌ Error cambiando motor: {e}")
+            print(f"[ERROR] Error cambiando motor: {e}")
             return False
     
     def get_available_engines(self):
@@ -239,6 +328,57 @@ class AudioTranscriptor:
     def get_current_engine_info(self):
         """Obtener información del motor actual"""
         return self.engine_manager.get_current_engine_info()
+    
+    def load_audio_profile(self, profile_name):
+        """Cargar un perfil de audio predefinido"""
+        if profile_name not in self.audio_profiles:
+            print(f"[ERROR] Perfil '{profile_name}' no encontrado")
+            return False
+        
+        try:
+            print(f"[AUDIO] Cargando perfil de audio: {profile_name}")
+            
+            # Detener transcripción si está activa
+            was_listening = self.is_listening
+            if was_listening:
+                self.stop_listening()
+            
+            profile = self.audio_profiles[profile_name]
+            
+            # Actualizar configuración de audio
+            self.audio_config.update(profile['config'])
+            
+            # Mantener language y device_index si existen
+            if 'language' not in profile['config']:
+                profile['config']['language'] = self.audio_config.get('language', 'es-ES')
+            if 'device_index' not in profile['config']:
+                profile['config']['device_index'] = self.audio_config.get('device_index', None)
+            
+            # Reinicializar micrófono con nueva configuración
+            self._initialize_microphone()
+            
+            print(f"[OK] Perfil '{profile['name']}' cargado exitosamente")
+            print(f"[INFO] {profile['description']}")
+            
+            # Reanudar transcripción si estaba activa
+            if was_listening:
+                self.start_listening()
+            
+            return True
+            
+        except Exception as e:
+            print(f"[ERROR] Error cargando perfil: {e}")
+            return False
+    
+    def get_audio_profiles(self):
+        """Obtener lista de perfiles disponibles"""
+        return {
+            profile_id: {
+                'name': profile['name'],
+                'description': profile['description']
+            }
+            for profile_id, profile in self.audio_profiles.items()
+        }
     
     def update_audio_config(self, new_config):
         """Actualizar configuración de audio"""
@@ -258,11 +398,11 @@ class AudioTranscriptor:
                 recognizer.dynamic_energy_adjustment_damping = self.audio_config.get('dynamic_energy_adjustment_damping', 0.15)
                 recognizer.pause_threshold = self.audio_config.get('pause_threshold', 0.5)
             
-            print(f"🔧 Configuración de audio actualizada: {new_config}")
+            print(f"[CONFIG] Configuracion de audio actualizada: {new_config}")
             return True
             
         except Exception as e:
-            print(f"❌ Error actualizando configuración: {e}")
+            print(f"[ERROR] Error actualizando configuracion: {e}")
             return False
     
     def start_listening(self):
@@ -271,30 +411,30 @@ class AudioTranscriptor:
             return
         
         if not self.microphone or not self.engine_manager.current_engine:
-            print("❌ Micrófono o motor no disponible")
+            print("[ERROR] Microfono o motor no disponible")
             return
         
         self.is_listening = True
         self.listen_thread = threading.Thread(target=self._listen_loop, daemon=True)
         self.listen_thread.start()
-        print("🎤 Iniciando transcripción en tiempo real...")
+        print("[TRANSCRIPTION] Iniciando transcripcion en tiempo real...")
     
     def stop_listening(self):
         """Detener transcripción"""
         self.is_listening = False
         if self.listen_thread:
             self.listen_thread.join(timeout=2)
-        print("⏹️ Transcripción detenida")
+        print("[TRANSCRIPTION] Transcripcion detenida")
     
     def _listen_loop(self):
         """Loop principal de escucha"""
         if not self.engine_manager.current_engine or not self.microphone:
-            print("❌ No hay motor activo o micrófono disponible")
+            print("[ERROR] No hay motor activo o microfono disponible")
             socketio.emit('error', {'message': 'No hay motor activo o micrófono disponible'})
             return
         
         recognizer = self.engine_manager.current_engine.recognizer
-        print(f"🎤 Iniciando loop de escucha con motor: {self.engine_manager.current_engine_name}")
+        print(f"[TRANSCRIPTION] Iniciando loop de escucha con motor: {self.engine_manager.current_engine_name}")
         
         # Emitir estado de escucha iniciado
         socketio.emit('listening_status', {'status': 'started', 'message': 'Escuchando...'})
@@ -350,19 +490,19 @@ class AudioTranscriptor:
                         # Intentar continuar en lugar de romper
                         continue
                         
-        print("⏹️ Loop de escucha terminado")
+        print("[TRANSCRIPTION] Loop de escucha terminado")
         socketio.emit('listening_status', {'status': 'stopped', 'message': 'Escucha detenida'})
     
     def _process_audio(self, audio_data):
         """Procesar audio transcrito"""
         try:
-            print("🔄 Procesando audio capturado...")
+            print("[AUDIO] Procesando audio capturado...")
             
             # Transcribir usando el motor actual
             text = self.engine_manager.transcribe(audio_data)
             
             if text:
-                print(f"📝 Texto transcrito: '{text}'")
+                print(f"[TRANSCRIPTION] Texto transcrito: '{text}'")
                 
                 # Actualizar estadísticas
                 self.stats['total_transcriptions'] += 1
@@ -371,7 +511,7 @@ class AudioTranscriptor:
                 fraud_analysis = self.fraud_detector.analyze_text(text)
                 if fraud_analysis['is_fraud']:
                     self.stats['fraud_detected'] += 1
-                    print(f"⚠️ FRAUDE DETECTADO ({fraud_analysis['probability']}%)")
+                    print(f"[FRAUD] FRAUDE DETECTADO ({fraud_analysis['probability']}%)")
                 
                 # Crear resultado
                 result = {
@@ -389,10 +529,10 @@ class AudioTranscriptor:
                 # Emitir resultado via SocketIO
                 socketio.emit('transcription_result', result)
                 
-                print(f"✅ Resultado enviado via SocketIO")
+                print("[OK] Resultado enviado via SocketIO")
                 
             else:
-                print("🔇 No se pudo transcribir el audio (silencio o ruido)")
+                print("[WARNING] No se pudo transcribir el audio (silencio o ruido)")
                 # Emitir información de debug
                 socketio.emit('transcription_debug', {
                     'message': 'Audio capturado pero no se pudo transcribir (posiblemente silencio)',
@@ -402,7 +542,7 @@ class AudioTranscriptor:
                 
         except Exception as e:
             error_msg = f"Error procesando audio: {e}"
-            print(f"❌ {error_msg}")
+            print(f"[ERROR] {error_msg}")
             
             # Emitir error específico
             socketio.emit('transcription_error', {
@@ -471,17 +611,25 @@ class AudioTranscriptor:
                         # Fin del segmento; incluir padding de cola implícito en ring_buffer
                         print("🏁 VAD: fin de voz")
                         segment_bytes = b''.join(voiced_frames)
+                        
+                        # Validar duración mínima del segmento
+                        min_ms = self.audio_config.get('vad_min_segment_ms', 250)
+                        segment_duration_ms = (len(segment_bytes) / bytes_per_sample) / sample_rate * 1000
+                        
+                        if segment_duration_ms >= min_ms:
+                            # Convertir a AudioData (PCM16 mono)
+                            audio_data = sr.AudioData(segment_bytes, sample_rate, bytes_per_sample)
+                            threading.Thread(
+                                target=self._process_audio,
+                                args=(audio_data,),
+                                daemon=True
+                            ).start()
+                        else:
+                            print(f"⏭️ Segmento descartado (demasiado corto: {segment_duration_ms:.0f}ms < {min_ms}ms)")
+                        
                         voiced_frames = []
                         ring_buffer.clear()
                         triggered = False
-
-                        # Convertir a AudioData (PCM16 mono)
-                        audio_data = sr.AudioData(segment_bytes, sample_rate, bytes_per_sample)
-                        threading.Thread(
-                            target=self._process_audio,
-                            args=(audio_data,),
-                            daemon=True
-                        ).start()
 
         finally:
             stream.stop_stream()
@@ -516,6 +664,9 @@ HTML_TEMPLATE = '''
         .engine-card:hover { transform: translateY(-2px); box-shadow: 0 4px 15px rgba(0,0,0,0.2); }
         .engine-card.active { border: 3px solid #28a745; background: #d4edda; }
         .stat-card { background: linear-gradient(45deg, #667eea, #764ba2); color: white; }
+        .profile-card { transition: all 0.3s; border: 2px solid #dee2e6; }
+        .profile-card:hover { transform: translateY(-3px); box-shadow: 0 6px 20px rgba(0,0,0,0.3); border-color: #ffc107; }
+        .profile-card.active { border: 3px solid #ffc107; background: #fffbf0; }
     </style>
 </head>
 <body>
@@ -583,6 +734,65 @@ HTML_TEMPLATE = '''
                         </button>
                     </div>
                     <div class="card-body" id="audio-config-body">
+                        <!-- Perfiles Predefinidos -->
+                        <div class="row mb-4">
+                            <div class="col-12">
+                                <h6 class="mb-3">
+                                    <i class="fas fa-magic"></i> Perfiles Predefinidos
+                                    <button type="button" class="btn btn-sm btn-outline-info ms-2" 
+                                            data-bs-toggle="tooltip" data-bs-placement="top" 
+                                            title="Selecciona un perfil optimizado según tu entorno. Cada perfil ajusta automáticamente todos los parámetros de audio para un caso de uso específico">
+                                        <i class="fas fa-info-circle"></i>
+                                    </button>
+                                </h6>
+                                <div class="row" id="audio-profiles-container">
+                                    <!-- Se llenan dinámicamente desde JavaScript -->
+                                    <div class="col-md-4 mb-3">
+                                        <div class="card h-100 profile-card" onclick="loadAudioProfile('office')" style="cursor: pointer; transition: all 0.3s;">
+                                            <div class="card-body text-center">
+                                                <h6><i class="fas fa-building"></i> Oficina Tranquila</h6>
+                                                <p class="small text-muted mb-0">Alta precisión, sin ruido de fondo</p>
+                                                <span class="badge bg-success mt-2">Recomendado</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-4 mb-3">
+                                        <div class="card h-100 profile-card" onclick="loadAudioProfile('callcenter')" style="cursor: pointer; transition: all 0.3s;">
+                                            <div class="card-body text-center">
+                                                <h6><i class="fas fa-headset"></i> Call Center</h6>
+                                                <p class="small text-muted mb-0">Ruido variable, baja latencia con VAD</p>
+                                                <span class="badge bg-primary mt-2">VAD Activado</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-4 mb-3">
+                                        <div class="card h-100 profile-card" onclick="loadAudioProfile('voip')" style="cursor: pointer; transition: all 0.3s;">
+                                            <div class="card-body text-center">
+                                                <h6><i class="fas fa-phone"></i> Telefónico/VoIP</h6>
+                                                <p class="small text-muted mb-0">Optimizado para llamadas (8kHz)</p>
+                                                <span class="badge bg-warning mt-2">8kHz</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <hr class="my-4">
+                        
+                        <!-- Controles Avanzados -->
+                        <div class="row mb-3">
+                            <div class="col-12">
+                                <h6>
+                                    <i class="fas fa-cog"></i> Controles Avanzados
+                                    <button class="btn btn-sm btn-outline-secondary ms-2" onclick="toggleAdvancedControls()">
+                                        <i class="fas fa-chevron-down" id="advanced-chevron"></i> Mostrar/Ocultar
+                                    </button>
+                                </h6>
+                            </div>
+                        </div>
+                        
+                        <div id="advanced-controls" style="display: none;">
                         <div class="row">
                             <div class="col-md-4">
                                 <label class="form-label">
@@ -687,6 +897,8 @@ HTML_TEMPLATE = '''
                                 </div>
                             </div>
                         </div>
+                        </div>
+                        <!-- Fin de Controles Avanzados -->
                     </div>
                 </div>
             </div>
@@ -887,6 +1099,98 @@ HTML_TEMPLATE = '''
                 chevron.className = 'fas fa-chevron-down';
             }
             audioConfigVisible = !audioConfigVisible;
+        }
+
+        let advancedControlsVisible = false;
+        
+        function toggleAdvancedControls() {
+            const controls = document.getElementById('advanced-controls');
+            const chevron = document.getElementById('advanced-chevron');
+            
+            if (advancedControlsVisible) {
+                controls.style.display = 'none';
+                chevron.className = 'fas fa-chevron-right';
+            } else {
+                controls.style.display = 'block';
+                chevron.className = 'fas fa-chevron-down';
+            }
+            advancedControlsVisible = !advancedControlsVisible;
+        }
+
+        function loadAudioProfile(profileName) {
+            debugLog('🎨 Cargando perfil de audio: ' + profileName);
+            
+            fetch('/api/load_audio_profile', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({profile_name: profileName})
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    showNotification(`Perfil ${profileName} cargado exitosamente`, 'success');
+                    debugLog('✅ Perfil cargado: ' + profileName);
+                    
+                    // Marcar perfil activo visualmente
+                    document.querySelectorAll('.profile-card').forEach(card => {
+                        card.classList.remove('active');
+                    });
+                    event.target.closest('.profile-card').classList.add('active');
+                    
+                    // Recargar configuración de audio en la UI
+                    loadCurrentAudioConfig();
+                } else {
+                    showNotification('Error cargando perfil: ' + data.error, 'error');
+                }
+            })
+            .catch(error => {
+                debugLog('❌ Error cargando perfil: ' + error.message);
+                showNotification('Error cargando perfil', 'error');
+            });
+        }
+
+        function loadCurrentAudioConfig() {
+            fetch('/api/audio_config')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.config) {
+                        const config = data.config;
+                        
+                        // Actualizar controles avanzados
+                        document.getElementById('energy_threshold').value = config.energy_threshold || 600;
+                        document.getElementById('energy_value').textContent = config.energy_threshold || 600;
+                        document.getElementById('pause_threshold').value = config.pause_threshold || 0.6;
+                        document.getElementById('pause_value').textContent = config.pause_threshold || 0.6;
+                        document.getElementById('phrase_time_limit').value = config.phrase_time_limit || 10;
+                        document.getElementById('phrase_value').textContent = config.phrase_time_limit || 10;
+                        document.getElementById('listen_timeout').value = config.listen_timeout || 3;
+                        document.getElementById('timeout_value').textContent = config.listen_timeout || 3;
+                        document.getElementById('language').value = config.language || 'es-ES';
+                        document.getElementById('dynamic_energy_threshold').checked = config.dynamic_energy_threshold || false;
+                        
+                        // VAD fields
+                        const vadEnabledEl = document.getElementById('vad_enabled');
+                        const vadAggEl = document.getElementById('vad_aggressiveness');
+                        const vadPadEl = document.getElementById('vad_padding_ms');
+                        const vadAggValEl = document.getElementById('vad_agg_value');
+                        const vadPadValEl = document.getElementById('vad_padding_value');
+                        
+                        if (vadEnabledEl) vadEnabledEl.checked = !!config.vad_enabled;
+                        if (vadAggEl) { 
+                            vadAggEl.value = (config.vad_aggressiveness ?? 2); 
+                            if (vadAggValEl) vadAggValEl.textContent = vadAggEl.value; 
+                        }
+                        if (vadPadEl) { 
+                            vadPadEl.value = (config.vad_padding_ms ?? 250); 
+                            if (vadPadValEl) vadPadValEl.textContent = vadPadEl.value; 
+                        }
+                        
+                        debugLog('✅ Configuración de audio actualizada en UI');
+                    }
+                })
+                .catch(error => {
+                    debugLog('❌ Error cargando configuración: ' + error.message);
+                });
         }
 
         function startListening() {
@@ -1179,34 +1483,8 @@ HTML_TEMPLATE = '''
                 loadEngines();
             }, 1000);
             
-            // Cargar configuración de audio actual
-            fetch('/api/audio_config')
-                .then(response => response.json())
-                .then(data => {
-                    if (data.config) {
-                        const config = data.config;
-                        document.getElementById('energy_threshold').value = config.energy_threshold || 2000;
-                        document.getElementById('energy_value').textContent = config.energy_threshold || 2000;
-                        document.getElementById('pause_threshold').value = config.pause_threshold || 0.5;
-                        document.getElementById('pause_value').textContent = config.pause_threshold || 0.5;
-                        document.getElementById('phrase_time_limit').value = config.phrase_time_limit || 8;
-                        document.getElementById('phrase_value').textContent = config.phrase_time_limit || 8;
-                        document.getElementById('listen_timeout').value = config.listen_timeout || 2;
-                        document.getElementById('timeout_value').textContent = config.listen_timeout || 2;
-                        document.getElementById('language').value = config.language || 'es-ES';
-                        document.getElementById('dynamic_energy_threshold').checked = config.dynamic_energy_threshold || false;
-                        // VAD fields
-                        const vadEnabledEl = document.getElementById('vad_enabled');
-                        const vadAggEl = document.getElementById('vad_aggressiveness');
-                        const vadPadEl = document.getElementById('vad_padding_ms');
-                        const vadAggValEl = document.getElementById('vad_agg_value');
-                        const vadPadValEl = document.getElementById('vad_padding_value');
-                        if (vadEnabledEl) vadEnabledEl.checked = !!config.vad_enabled;
-                        if (vadAggEl) { vadAggEl.value = (config.vad_aggressiveness ?? 2); if (vadAggValEl) vadAggValEl.textContent = vadAggEl.value; }
-                        if (vadPadEl) { vadPadEl.value = (config.vad_padding_ms ?? 300); if (vadPadValEl) vadPadValEl.textContent = vadPadEl.value; }
-                    }
-                })
-                .catch(error => console.error('Error cargando configuración:', error));
+            // Cargar configuración de audio actual usando la nueva función
+            loadCurrentAudioConfig();
         });
     </script>
 
@@ -1388,6 +1666,35 @@ def get_audio_config():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
+@app.route('/api/audio_profiles')
+def get_audio_profiles():
+    """API para obtener perfiles de audio disponibles"""
+    try:
+        return jsonify({
+            'success': True,
+            'profiles': transcriptor.get_audio_profiles()
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/load_audio_profile', methods=['POST'])
+def load_audio_profile():
+    """API para cargar un perfil de audio"""
+    try:
+        data = request.get_json()
+        profile_name = data.get('profile_name')
+        
+        if not profile_name:
+            return jsonify({'success': False, 'error': 'profile_name requerido'})
+        
+        success = transcriptor.load_audio_profile(profile_name)
+        return jsonify({
+            'success': success,
+            'message': f'Perfil {profile_name} cargado' if success else 'Error cargando perfil'
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
 @app.route('/start_listening', methods=['POST'])
 def start_listening():
     """Iniciar transcripción"""
@@ -1513,7 +1820,7 @@ def handle_change_engine(data):
             emit('error', {'message': 'ID de motor no especificado'})
             return
         
-        print(f"🔧 Cambiando motor a: {engine_id}")
+        print(f"[SOCKETIO] Solicitud de cambio de motor a: {engine_id}")
         
         # Detener transcripción si está activa
         was_listening = transcriptor.is_listening
@@ -1533,13 +1840,14 @@ def handle_change_engine(data):
                 transcriptor.start_listening()
                 emit('listening_status', {'status': 'started', 'message': f'Transcripción reanudada con {engine_id}'})
             
-            print(f"✅ Motor cambiado exitosamente a: {engine_id}")
+            print(f"[OK] Motor cambiado exitosamente via SocketIO a: {engine_id}")
         else:
+            print(f"[ERROR] No se pudo cambiar al motor: {engine_id}")
             emit('error', {'message': f'No se pudo cambiar al motor {engine_id}'})
             
     except Exception as e:
         error_msg = f"Error cambiando motor: {str(e)}"
-        print(f"❌ {error_msg}")
+        print(f"[ERROR] {error_msg}")
         emit('error', {'message': error_msg})
 
 @socketio.on('update_audio_config')
@@ -1615,16 +1923,16 @@ def handle_get_stats():
 
 if __name__ == '__main__':
     print("\n" + "="*80)
-    print("🚀 TRANSCRIPTOR MODULAR SPEECH-TO-TEXT")
-    print("🔧 Motores disponibles: DeepSpeech • Whisper • Silero • Vosk")
-    print("🎤 Panel de configuración de audio FUNCIONAL")
-    print("🌐 URL: http://localhost:5003")
+    print("[INIT] TRANSCRIPTOR MODULAR SPEECH-TO-TEXT")
+    print("[INFO] Motores disponibles: DeepSpeech, Whisper, Silero, Vosk")
+    print("[INFO] Panel de configuracion de audio FUNCIONAL")
+    print("[INFO] URL: http://localhost:5003")
     print("="*80)
     
     try:
         socketio.run(app, host='0.0.0.0', port=5003, debug=False)
     except KeyboardInterrupt:
-        print("\n⏹️ Deteniendo servidor...")
+        print("\n[SHUTDOWN] Deteniendo servidor...")
         transcriptor.stop_listening()
         transcriptor.engine_manager.cleanup()
-        print("✅ Servidor detenido correctamente")
+        print("[OK] Servidor detenido correctamente")

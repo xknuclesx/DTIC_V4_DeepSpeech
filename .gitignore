@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Entorno virtual
+transcriptor_env/
+venv/
+env/
+ENV/
+
+# Modelos de Machine Learning (grandes)
+*.joblib
+*.pkl
+*.h5
+*.pth
+*.pt
+
+# Modelos de Vosk (grandes)
+models/
+*.zip
+
+# Configuración de IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
+
+# Archivos temporales
+*.tmp
+*.bak
+*.cache
+
+# Archivos YAML de configuración de modelos
+latest_silero_models.yml

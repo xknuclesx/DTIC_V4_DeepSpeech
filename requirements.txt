@@ -8,3 +8,8 @@ numpy==1.24.3
 python-socketio==5.9.0
 python-engineio==4.7.1
 webrtcvad==2.0.10
+
+# Análisis de Sentimiento
+transformers>=4.35.0
+torch>=2.0.0
+vaderSentiment>=3.3.2

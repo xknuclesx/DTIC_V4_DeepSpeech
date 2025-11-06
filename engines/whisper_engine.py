@@ -29,18 +29,26 @@ class WhisperEngine(BaseTranscriptionEngine):
         """
         try:
             if self.use_faster_whisper:
-                # Usar faster-whisper para mejor rendimiento
+                # Verificar primero si torch está disponible (faster-whisper lo requiere)
                 try:
-                    from faster_whisper import WhisperModel
-                    self.whisper_model = WhisperModel(
-                        self.model_size, 
-                        device="cpu",
-                        compute_type="int8"
-                    )
-                    print(f"✅ Faster-Whisper modelo '{self.model_size}' cargado")
+                    import torch
                 except ImportError:
-                    print("⚠️ faster-whisper no disponible, usando whisper estándar")
+                    print("⚠️ torch no disponible, faster-whisper requiere torch")
                     self.use_faster_whisper = False
+                
+                # Intentar usar faster-whisper si torch está disponible
+                if self.use_faster_whisper:
+                    try:
+                        from faster_whisper import WhisperModel
+                        self.whisper_model = WhisperModel(
+                            self.model_size, 
+                            device="cpu",
+                            compute_type="int8"
+                        )
+                        print(f"✅ Faster-Whisper modelo '{self.model_size}' cargado")
+                    except Exception as e:
+                        print(f"⚠️ faster-whisper no disponible: {type(e).__name__}")
+                        self.use_faster_whisper = False
             
             if not self.use_faster_whisper:
                 # Usar whisper estándar
@@ -48,8 +56,8 @@ class WhisperEngine(BaseTranscriptionEngine):
                     import whisper
                     self.whisper_model = whisper.load_model(self.model_size)
                     print(f"✅ Whisper modelo '{self.model_size}' cargado")
-                except ImportError:
-                    print("❌ No se pudo importar whisper")
+                except Exception as e:
+                    print(f"❌ No se pudo importar whisper: {type(e).__name__}")
                     return False
             
             self.is_initialized = True

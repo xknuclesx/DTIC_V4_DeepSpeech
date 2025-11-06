@@ -41,13 +41,6 @@ class TranscriptionEngineManager:
                 'display_name': 'Silero STT',
                 'description': 'Motor rápido y eficiente usando Silero',
                 'requires_internet': False
-            },
-            'vosk': {
-                'module': 'engines.vosk_engine',
-                'class': 'VoskEngine',
-                'display_name': 'Vosk (Kaldi)',
-                'description': 'Motor offline usando Vosk/Kaldi',
-                'requires_internet': False
             }
         }
         
@@ -69,6 +62,9 @@ class TranscriptionEngineManager:
                     else:
                         available = False
                         status_msg = "cargado pero no disponible (dependencias faltantes)"
+                except KeyboardInterrupt:
+                    # No capturar KeyboardInterrupt - dejarlo propagarse
+                    raise
                 except Exception as init_error:
                     available = False
                     status_msg = f"cargado pero no disponible: {str(init_error)}"

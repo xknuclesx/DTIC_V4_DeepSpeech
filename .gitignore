@@ -22,7 +22,7 @@ ENV/
 *.pth
 *.pt
 
-# Modelos de Vosk (grandes)
+# Modelos de transcripción (grandes)
 models/
 *.zip
 
